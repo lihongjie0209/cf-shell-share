@@ -1,0 +1,12 @@
+# Node / Worker
+worker/node_modules/
+worker/dist/
+worker/.wrangler/
+
+# Go
+client/shellshare
+client/shellshare.exe
+
+# OS
+.DS_Store
+Thumbs.db
