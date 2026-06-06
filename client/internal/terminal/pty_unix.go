@@ -3,16 +3,21 @@
 package terminal
 
 import (
+	"io"
 	"os"
 	"os/exec"
 
 	"github.com/creack/pty"
 )
 
+type unixPTY struct{ f *os.File }
+
+func (p *unixPTY) Read(b []byte) (int, error)  { return p.f.Read(b) }
+func (p *unixPTY) Write(b []byte) (int, error) { return p.f.Write(b) }
+func (p *unixPTY) Close() error                { return p.f.Close() }
+
 // StartPTY forks the given shell under a PTY with the given initial size.
-// Returns the PTY master file, a channel that closes when the child exits,
-// and any error.
-func StartPTY(shell string, cols, rows uint16) (*os.File, <-chan struct{}, error) {
+func StartPTY(shell string, cols, rows uint16) (io.ReadWriteCloser, <-chan struct{}, error) {
 	cmd := exec.Command(shell)
 	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
 
@@ -27,12 +32,14 @@ func StartPTY(shell string, cols, rows uint16) (*os.File, <-chan struct{}, error
 		close(done)
 	}()
 
-	return ptmx, done, nil
+	return &unixPTY{ptmx}, done, nil
 }
 
 // ResizePTY resizes the PTY to the given dimensions.
-func ResizePTY(ptmx *os.File, cols, rows uint16) {
-	_ = pty.Setsize(ptmx, &pty.Winsize{Cols: cols, Rows: rows})
+func ResizePTY(p io.ReadWriteCloser, cols, rows uint16) {
+	if u, ok := p.(*unixPTY); ok {
+		_ = pty.Setsize(u.f, &pty.Winsize{Cols: cols, Rows: rows})
+	}
 }
 
 // GetSize returns the current terminal dimensions.

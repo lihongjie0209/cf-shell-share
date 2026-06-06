@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 
@@ -70,13 +71,11 @@ func runShare(cmd *cobra.Command, args []string) error {
 	// 7. Start PTY
 	shell := shareShell
 	if shell == "" {
-		shell = os.Getenv("SHELL")
-		if shell == "" {
-			shell = "/bin/bash"
-		}
+		shell = defaultShell()
 	}
 
 	cols, rows := terminal.GetSize()
+	var ptmx io.ReadWriteCloser
 	ptmx, ptyClosed, err := terminal.StartPTY(shell, cols, rows)
 	if err != nil {
 		return fmt.Errorf("start pty: %w", err)
