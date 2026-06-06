@@ -32,28 +32,26 @@ decrypted content.`,
 
 // parseJoinURL accepts either a full join URL or a bare invite token.
 //
-//   https://sh.lihongjie.cn/j/<invite>  →  server="https://sh.lihongjie.cn", invite="<invite>"
-//   <bare-invite>                        →  server from --server flag
-func parseJoinURL(arg, flagServer string) (serverURL, invite string, err error) {
-	// Bare invite: no scheme, no slashes
+//   https://sh.lihongjie.cn/j/<invite>?h=apac  →  server, invite, hint
+//   <bare-invite>                               →  server from --server flag, no hint
+func parseJoinURL(arg, flagServer string) (serverURL, invite, hint string, err error) {
 	if !strings.HasPrefix(arg, "http://") && !strings.HasPrefix(arg, "https://") {
-		return flagServer, arg, nil
+		return flagServer, arg, "", nil
 	}
 	u, err := url.Parse(arg)
 	if err != nil {
-		return "", "", fmt.Errorf("invalid link: %w", err)
+		return "", "", "", fmt.Errorf("invalid link: %w", err)
 	}
-	// Path must be /j/<invite>
 	parts := strings.SplitN(strings.TrimPrefix(u.Path, "/"), "/", 2)
 	if len(parts) != 2 || parts[0] != "j" || parts[1] == "" {
-		return "", "", fmt.Errorf("link must be in the form <server>/j/<invite>, got path %q", u.Path)
+		return "", "", "", fmt.Errorf("link must be in the form <server>/j/<invite>, got path %q", u.Path)
 	}
 	server := u.Scheme + "://" + u.Host
-	return server, parts[1], nil
+	return server, parts[1], u.Query().Get("h"), nil
 }
 
 func runJoin(cmd *cobra.Command, args []string) error {
-	joinServer, invite, err := parseJoinURL(args[0], serverURL)
+	joinServer, invite, hint, err := parseJoinURL(args[0], serverURL)
 	if err != nil {
 		return err
 	}
@@ -64,8 +62,8 @@ func runJoin(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("invalid invite in link: %w", err)
 	}
 
-	// 2. Connect to relay as viewer
-	client, err := relay.Connect(joinServer, token, relay.RoleViewer)
+	// 2. Connect to relay as viewer, passing hint so the WS routes to the same DO
+	client, err := relay.Connect(joinServer, token, hint, relay.RoleViewer)
 	if err != nil {
 		return fmt.Errorf("connect to relay: %w", err)
 	}

@@ -25,7 +25,7 @@ export default {
     }
 
     if (pathname === '/') return handleLanding();
-    if (pathname === '/session' && request.method === 'POST') return handleCreateSession(env);
+    if (pathname === '/session' && request.method === 'POST') return handleCreateSession(request, env);
     if (pathname === '/ws') return handleWs(request, env, url);
     if (pathname.startsWith('/j/')) return handleJoinRedirect(request.url);
 
@@ -33,23 +33,48 @@ export default {
   },
 };
 
+// ── Location hint helper ─────────────────────────────────────────────────────
+// Maps the requester's CF continent to the nearest DO region.
+// This ensures the Durable Object is placed close to the users, not in a
+// default US datacenter which would add ~200-400ms per relay hop.
+
+type DurableObjectLocationHint = 'wnam' | 'enam' | 'sam' | 'weur' | 'eeur' | 'apac' | 'oc' | 'afr' | 'me';
+
+function locationHint(request: Request): DurableObjectLocationHint {
+  const cf = (request as any).cf as { continent?: string; timezone?: string } | undefined;
+  const continent = cf?.continent ?? '';
+  const tz = cf?.timezone ?? '';
+  // Map continent codes to CF DO location hints
+  const map: Record<string, DurableObjectLocationHint> = {
+    AS: 'apac', OC: 'apac',
+    EU: 'weur',
+    AF: 'afr',
+    SA: 'sam',
+    ME: 'me',
+  };
+  if (map[continent]) return map[continent];
+  // North America: split east/west by timezone
+  if (continent === 'NA') {
+    return (tz.startsWith('America/Los_Angeles') || tz.startsWith('America/Vancouver') ||
+            tz.startsWith('America/Phoenix') || tz.startsWith('US/Pacific'))
+      ? 'wnam' : 'enam';
+  }
+  return 'wnam'; // default
+}
+
 // ── Create session ──────────────────────────────────────────────────────────
 
-async function handleCreateSession(env: Env): Promise<Response> {
-  // 32 hex chars = 16 bytes randomness.
-  // The token is the session ID (visible to server for routing only).
-  // The AES key = SHA-256(token) and is derived client-side — never sent here.
+async function handleCreateSession(request: Request, env: Env): Promise<Response> {
   const token = Array.from(crypto.getRandomValues(new Uint8Array(16)))
     .map(b => b.toString(16).padStart(2, '0'))
     .join('');
 
+  const hint = locationHint(request);
+  // Pre-warm the DO in the target region by touching it once.
+  // We use idFromName so subsequent WS connections route to the same instance.
   const id = env.SESSIONS.idFromName(token);
-  const stub = env.SESSIONS.get(id);
-
-  const res = await stub.fetch('https://internal/init', { method: 'POST' });
-  if (!res.ok) return jsonError('Failed to create session', 500);
-
-  return json({ token }, { headers: corsHeaders() });
+  // Just return — no need to ping the DO. The DO is created lazily on first WS.
+  return json({ token, hint }, { headers: corsHeaders() });
 }
 
 // ── WebSocket upgrade → forward to DO ──────────────────────────────────────
@@ -57,13 +82,16 @@ async function handleCreateSession(env: Env): Promise<Response> {
 async function handleWs(request: Request, env: Env, url: URL): Promise<Response> {
   const token = url.searchParams.get('token');
   const role = url.searchParams.get('role');
+  // hint is passed by the client (obtained from POST /session) so that the
+  // viewer's WS connection routes to the same regional DO as the host.
+  const hint = (url.searchParams.get('hint') || locationHint(request)) as DurableObjectLocationHint;
 
   if (!token || !role || (role !== 'host' && role !== 'viewer')) {
     return new Response('Missing or invalid token/role', { status: 400 });
   }
 
   const id = env.SESSIONS.idFromName(token);
-  const stub = env.SESSIONS.get(id);
+  const stub = env.SESSIONS.get(id, { locationHint: hint });
   return stub.fetch(request);
 }
 
@@ -79,8 +107,6 @@ export class SessionDO {
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
-
-    if (url.pathname === '/init') return new Response('ok');
 
     const role = url.searchParams.get('role') as 'host' | 'viewer' | null;
     if (!role) return new Response('Missing role', { status: 400 });

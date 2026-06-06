@@ -32,31 +32,33 @@ mu   sync.Mutex // serialises writes
 }
 
 // CreateSession calls POST /session on the relay server and returns the
-// 32-char hex routing token.
-func CreateSession(serverURL string) (string, error) {
+// 32-char hex routing token and the DO location hint.
+func CreateSession(serverURL string) (token, hint string, err error) {
 resp, err := http.Post(serverURL+"/session", "application/json", nil)
 if err != nil {
-return "", fmt.Errorf("POST /session: %w", err)
+return "", "", fmt.Errorf("POST /session: %w", err)
 }
 defer resp.Body.Close()
 body, _ := io.ReadAll(resp.Body)
 if resp.StatusCode != http.StatusOK {
-return "", fmt.Errorf("POST /session returned %d: %s", resp.StatusCode, body)
+return "", "", fmt.Errorf("POST /session returned %d: %s", resp.StatusCode, body)
 }
 var result struct {
 Token string `json:"token"`
+Hint  string `json:"hint"`
 }
 if err := json.Unmarshal(body, &result); err != nil {
-return "", fmt.Errorf("parse session response: %w", err)
+return "", "", fmt.Errorf("parse session response: %w", err)
 }
 if result.Token == "" {
-return "", fmt.Errorf("empty token in session response")
+return "", "", fmt.Errorf("empty token in session response")
 }
-return result.Token, nil
+return result.Token, result.Hint, nil
 }
 
 // Connect opens a WebSocket connection to the relay for the given session token.
-func Connect(serverURL, token string, role Role) (*Client, error) {
+// hint is the DO location hint returned by CreateSession (embedded in the invite).
+func Connect(serverURL, token, hint string, role Role) (*Client, error) {
 wsURL := strings.Replace(serverURL, "https://", "wss://", 1)
 wsURL = strings.Replace(wsURL, "http://", "ws://", 1)
 u, err := url.Parse(wsURL + "/ws")
@@ -66,6 +68,9 @@ return nil, err
 q := u.Query()
 q.Set("token", token)
 q.Set("role", string(role))
+if hint != "" {
+	q.Set("hint", hint)
+}
 u.RawQuery = q.Encode()
 
 conn, _, err := websocket.DefaultDialer.Dial(u.String(), nil)

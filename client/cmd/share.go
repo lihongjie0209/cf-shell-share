@@ -36,20 +36,22 @@ func runShare(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("generate keypair: %w", err)
 	}
 
-	// 2. Create session on relay server → get routing token
-	token, err := relay.CreateSession(serverURL)
+	// 2. Create session on relay server → get routing token + DO location hint
+	token, hint, err := relay.CreateSession(serverURL)
 	if err != nil {
 		return fmt.Errorf("create session: %w", err)
 	}
 
-	// 3. Build invite URL = <serverURL>/j/<base64url(token || host_pubkey)>
-	//    The URL embeds both the relay server and all crypto material, so the
-	//    viewer only needs to run: shellshare join <url>
+	// 3. Build invite URL. The hint is added as ?h= so the viewer's WS
+	//    connection can route to the same regional DO as the host.
 	invite := crypto.EncodeInvite(token, staticKey.Public)
 	joinURL := serverURL + "/j/" + invite
+	if hint != "" {
+		joinURL += "?h=" + hint
+	}
 
 	// 4. Connect to relay as host
-	wsClient, err := relay.Connect(serverURL, token, relay.RoleHost)
+	wsClient, err := relay.Connect(serverURL, token, hint, relay.RoleHost)
 	if err != nil {
 		return fmt.Errorf("connect to relay: %w", err)
 	}
